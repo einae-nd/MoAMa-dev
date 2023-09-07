@@ -1,9 +1,9 @@
 import argparse
+from cmath import inf
+import math
 
 from loader import MoleculeDataset
-from datautils import moltree_to_graph_data
 from torch_geometric.loader import DataLoader
-from get_vocab import get_motifs
 
 import torch
 import torch.nn as nn
@@ -13,8 +13,7 @@ import torch.optim as optim
 from tqdm import tqdm
 import numpy as np
 
-from gnn_model import GNN, GNN_graphpred
-from rationale import rationale_motif_pred
+from gnn_model import GNN, GNN_graphpred, GNNdev
 from sklearn.metrics import roc_auc_score
 
 from splitters import scaffold_split, random_split
@@ -24,38 +23,24 @@ from rdkit import Chem
 import os
 import shutil
 
-criterion = nn.BCEWithLogitsLoss(reduction = "none")
 
-def train(args, model_list, device, loader, optimizer_list, smiles_list):
+def train(args, model_list, device, loader, optimizer_list):
 
-    graph_pred, encoder_model, rationale_model = model_list
-    optimizer_pred, optimizer_encoder, optimizer_rationale = optimizer_list
+    criterion = nn.BCEWithLogitsLoss(reduction = "none")
+
+    graph_pred, encoder_model = model_list
+    optimizer_pred, optimizer_encoder = optimizer_list
     
     graph_pred.train()
-    rationale_model.train()
+    encoder_model.train()
 
     for step, batch in enumerate(tqdm(loader, desc="Iteration")):
 
         batch = batch.to(device)
 
-        smiles = [smiles_list[i] for i in batch.id]
-
-        motif_batch = get_motifs(smiles)
-        motif_batch_graph = []
-        for list in motif_batch:
-            motif_batch_graph.append(moltree_to_graph_data(list))
-
-        motif_node_rep = []
-        for motif_list in motif_batch_graph:
-            motif_rep = encoder_model(motif_list.x, motif_list.edge_index, motif_list.edge_attr)
-            motif_node_rep.append(motif_rep)
-
         node_rep = encoder_model(batch.x, batch.edge_index, batch.edge_attr)
 
-        motif_rat_rep, motif_rat_rep_aug, motif_loss = rationale_model(encoder_model, batch, node_rep, motif_node_rep)
-
-        y_pred = graph_pred(node_rep, batch.batch, motif_rat_rep)
-        y_pred_aug = graph_pred(node_rep, batch.batch, motif_rat_rep_aug)
+        y_pred = graph_pred(node_rep, batch.batch)
         y_true = batch.y.view(y_pred.shape).to(torch.float64)
 
         #Whether y is non-null or not.
@@ -63,75 +48,63 @@ def train(args, model_list, device, loader, optimizer_list, smiles_list):
 
         #Loss matrix
         loss_mat = criterion(y_pred.double(), (y_true+1)/2)
-        loss_mat_aug = criterion(y_pred_aug.double(), (y_true+1)/2)
+        
         #loss matrix after removing null target
         loss_mat = torch.where(is_valid, loss_mat, torch.zeros(loss_mat.shape).to(loss_mat.device).to(loss_mat.dtype))
-        loss_mat_aug = torch.where(is_valid, loss_mat_aug, torch.zeros(loss_mat_aug.shape).to(loss_mat_aug.device).to(loss_mat_aug.dtype))
             
         optimizer_pred.zero_grad()
-        optimizer_rationale.zero_grad()
+        optimizer_encoder.zero_grad()
 
         loss = torch.sum(loss_mat)/torch.sum(is_valid)
-        loss_aug = torch.sum(loss_mat_aug)/torch.sum(is_valid)
-        full_loss = loss + loss_aug
-        #print(loss)
-        full_loss.backward()
+        loss.backward()
 
         optimizer_pred.step()
-        optimizer_rationale.step()
+        optimizer_encoder.step()
 
+def eval(args, model_list, device, loader):
 
-def eval(args, model_list, device, loader, smiles_list):
-
-    graph_pred, encoder_model, rationale_model = model_list
+    graph_pred, encoder_model = model_list
 
     graph_pred.eval()
     encoder_model.eval()
-    rationale_model.eval()
 
     y_true = []
     y_scores = []
+    y_ids = []
 
     for step, batch in enumerate(tqdm(loader, desc="Iteration")):
 
         batch = batch.to(device)
 
-        smiles = [smiles_list[i] for i in batch.id]
-        motif_batch = get_motifs(smiles)
-        motif_batch_graph = []
-        for list in motif_batch:
-            motif_batch_graph.append(moltree_to_graph_data(list))
-
-        motif_node_rep = []
-        for motif_list in motif_batch_graph:
-            motif_rep = encoder_model(motif_list.x, motif_list.edge_index, motif_list.edge_attr)
-            motif_node_rep.append(motif_rep)
-
         with torch.no_grad():
             node_rep = encoder_model(batch.x, batch.edge_index, batch.edge_attr)
-            motif_rat_rep, _, _ = rationale_model(encoder_model, batch, node_rep, motif_node_rep)
-            y_pred = graph_pred(node_rep, batch.batch, motif_rat_rep)
+            y_pred = graph_pred(node_rep, batch.batch)
 
         y_true.append(batch.y.view(y_pred.shape))
-
         y_scores.append(y_pred)
+        y_ids.append(batch.id)
 
     y_true = torch.cat(y_true, dim = 0).cpu().numpy()
     y_scores = torch.cat(y_scores, dim = 0).cpu().numpy()
+    y_ids = torch.cat(y_ids, dim = 0).cpu().numpy()
 
     roc_list = []
+
     for i in range(y_true.shape[1]):
         #AUC is only defined when there is at least one positive data.
         if np.sum(y_true[:,i] == 1) > 0 and np.sum(y_true[:,i] == -1) > 0:
             is_valid = y_true[:,i]**2 > 0
+            print((y_true[is_valid,i] + 1)/2)
+            print(y_scores[is_valid,i])
+            print(y_ids)
             roc_list.append(roc_auc_score((y_true[is_valid,i] + 1)/2, y_scores[is_valid,i]))
+            
 
     if len(roc_list) < y_true.shape[1]:
         print("Some target is missing!")
         print("Missing ratio: %f" %(1 - float(len(roc_list))/y_true.shape[1]))
 
-    return sum(roc_list)/len(roc_list) #y_true.shape[1]
-
+    return sum(roc_list)/len(roc_list)
 
 
 def main():
@@ -160,9 +133,9 @@ def main():
     parser.add_argument('--JK', type=str, default="last",
                         help='how the node features across layers are combined. last, sum, max or concat')
     parser.add_argument('--gnn_type', type=str, default="gin")
-    parser.add_argument('--dataset', type=str, default = 'hiv', help='root directory of dataset. For now, only classification.')
-    parser.add_argument('--input_model_file', type=str, default = './saved_model/motif_pretrain.pth', help='filename to read the model (if there is any)')
-    parser.add_argument('--filename', type=str, default = '', help='output filename')
+    parser.add_argument('--dataset', type=str, default = "bace", help='root directory of dataset. For now, only classification.')
+    parser.add_argument('--input_model_file', type=str, default = "encoder", help='filename to read the model (if there is any)')
+    parser.add_argument('--filename', type=str, default = 'results', help='output filename')
     parser.add_argument('--seed', type=int, default=42, help = "Seed for splitting the dataset.")
     parser.add_argument("--hidden_size", type=int, default=300, help='hidden size')
     parser.add_argument('--runseed', type=int, default=0, help = "Seed for minibatch selection, random initialization.")
@@ -200,25 +173,21 @@ def main():
         raise ValueError("Invalid dataset name.")
 
     #set up dataset
-    dataset = MoleculeDataset("data/" + args.dataset, dataset=args.dataset)
-    
+    dataset = MoleculeDataset("dataset/" + args.dataset, dataset=args.dataset)  
+
     if args.split == "scaffold":
-        smiles_list = pd.read_csv('data/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
+        smiles_list = pd.read_csv('dataset/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
         train_dataset, valid_dataset, test_dataset = scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1)
         print("scaffold")
     elif args.split == "random":
         train_dataset, valid_dataset, test_dataset = random_split(dataset, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1, seed = args.seed)
         print("random")
     elif args.split == "random_scaffold":
-        smiles_list = pd.read_csv('data/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
+        smiles_list = pd.read_csv('dataset/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
         train_dataset, valid_dataset, test_dataset = random_scaffold_split(dataset, smiles_list, null_value=0, frac_train=0.8,frac_valid=0.1, frac_test=0.1, seed = args.seed)
         print("random scaffold")
     else:
         raise ValueError("Invalid split option.")
-
-    smiles_list = pd.read_csv('data/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
-
-    #print(train_dataset[0])
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers = args.num_workers)
     val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers = args.num_workers)
@@ -227,34 +196,51 @@ def main():
     #set up model
     graph_pred_model = GNN_graphpred(args.num_layer, args.emb_dim, num_tasks, JK = args.JK, drop_ratio = args.dropout_ratio, graph_pooling = args.graph_pooling, gnn_type = args.gnn_type).to(device)
 
-    #if not args.input_model_file == "":
-    #    model.from_pretrained(args.input_model_file)
-
-    # TODO TURN LOAD STATE DICT BACK ON ONCE PRETRAINING IS FINISHED
-
     encoder_model = GNN(args.num_layer, args.emb_dim, device, JK=args.JK, drop_ratio=args.dropout_ratio, gnn_type=args.gnn_type).to(device)
-    #encoder_model.load_state_dict(torch.load("./saved_model/encoder.pth"))
-    rationale_model = rationale_motif_pred(device, args.hidden_size, num_tasks, 5, args.emb_dim, args.gnn_type, args.dropout_ratio, 0.4, False).to(device)
-    #rationale_model.load_state_dict(torch.load("./saved_model/rationale.pth"))
+    if not args.input_model_file == "":
+        encoder_model.load_state_dict(torch.load("./saved_model/" + args.input_model_file + ".pth", map_location=torch.device(device)))
+   
+    model = [graph_pred_model, encoder_model]
 
-    model = [graph_pred_model, encoder_model, rationale_model]
-
-    #optimizer_pred = optim.Adam(model_param_group, lr=args.lr, weight_decay=args.decay)
     optimizer_pred = optim.Adam(graph_pred_model.parameters(), lr=args.lr, weight_decay=args.decay)
     optimizer_encoder = optim.Adam(encoder_model.parameters(), lr=args.lr, weight_decay=args.decay)
-    optimizer_rationale = optim.Adam(rationale_model.parameters(), lr=args.lr, weight_decay=args.decay)
 
-    optimizer = [optimizer_pred, optimizer_encoder, optimizer_rationale]
+    optimizer = [optimizer_pred, optimizer_encoder]
+
+    train_acc_list = []
+    val_acc_list = []
+    test_acc_list = []
+
+    best_test_acc = 0
 
     for epoch in range(1, args.epochs+1):
         print("====epoch " + str(epoch))
         
-        train(args, model, device, train_loader, optimizer, smiles_list)
+        train(args, model, device, train_loader, optimizer)
+        
+        print("====Evaluation")
+        if args.eval_train:
+            train_acc = eval(args, model, device, train_loader)
+        else:
+            print("omit the training accuracy computation")
+            train_acc = 0
 
-        val_acc = eval(args, model, device, val_loader, smiles_list)
-        test_acc = eval(args, model, device, test_loader, smiles_list)
+        val_acc = eval(args, model, device, val_loader)
+        test_acc = eval(args, model, device, test_loader)
+        if (test_acc > best_test_acc):
+            best_test_acc = test_acc
+        print("train: %f val: %f test: %f" %(train_acc, val_acc, test_acc))
 
-        print("val: %f test: %f" %(val_acc, test_acc))
+        val_acc_list.append(val_acc)
+        test_acc_list.append(test_acc)
+        train_acc_list.append(train_acc)
+
+    print("Best Test Accuracy: ", best_test_acc)
+
+    df = pd.concat([pd.DataFrame(train_acc_list), pd.DataFrame(val_acc_list), pd.DataFrame(test_acc_list)], axis=1)
+    df.columns = ['train_loss', 'val_loss', 'test_loss']
+    df.to_csv("log/" + args.filename + ".csv")
+
 
 if __name__ == "__main__":
     main()

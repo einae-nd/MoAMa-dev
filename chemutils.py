@@ -333,11 +333,3 @@ def get_clique_mol(mol, atoms):
     new_mol = copy_edit_mol(new_mol).GetMol()
     new_mol = sanitize(new_mol)  # We assume this is not None
     return new_mol
-
-#def get_clique_mol(mol, atoms):
-#    smiles = Chem.MolFragmentToSmiles(mol, atoms, kekuleSmiles=True)
-#    new_mol = Chem.MolFromSmiles(smiles, sanitize=False)
-#    new_mol = copy_edit_mol(new_mol).GetMol()
-#    new_mol = sanitize(new_mol) 
-    #if tmp_mol is not None: new_mol = tmp_mol
-#    return new_mol

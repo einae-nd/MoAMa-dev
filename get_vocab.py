@@ -22,62 +22,39 @@ def process(data):
 
 def get_motifs(data):
 
-    vocab = []
+    Chem.SanitizeMol(data)
+    motifs, edges = brics_decomp(data)
+    return motifs
 
-    for smiles in data:
-        
-        mol = Chem.MolFromSmiles(smiles)
-        Chem.SanitizeMol(mol)
+def get_motifs_edges(data):
 
-        motifs, edges = brics_decomp(mol)
+    Chem.SanitizeMol(data)
+    motifs, edges = brics_decomp(data)
+    return motifs, edges
 
-        motif_mols = []
-        for x in motifs:
-            motif = get_clique_mol(mol, x)
-            motif = Chem.MolToSmiles(motif)
-            motif_mols.append(motif)
-
-        vocab.append(motif_mols)
-
-    return vocab
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--ncpu', type=int, default=1)
+    parser.add_argument('--dataset', type=str, default="zinc")
     args = parser.parse_args()
 
-    data = [mol for line in sys.stdin for mol in line.split()[:2]]
-    data = list(set(data))
+    if (args.dataset == 'zinc'):
+        smiles_list = pd.read_csv('dataset/' + args.dataset + '/raw/all.txt', header=None)[0].tolist()
+    else:
+        smiles_list = pd.read_csv('dataset/' + args.dataset + '/processed/smiles.csv', header=None)[0].tolist()
 
-    batch_size = len(data) // args.ncpu + 1
-    batches = [data[i : i + batch_size] for i in range(0, len(data), batch_size)]
+    data = smiles_list
+    #data = ['CCOC(=O)c1cncn1C(C)c2ccccc2']
 
-    pool = Pool(args.ncpu)
-    vocab_list = pool.map(process, batches)
-    vocab = [(x,y) for vocab in vocab_list for x,y in vocab]
-    raw_vocab = vocab
-    vocab = list(set(vocab))
+    vocab = []
+    for i in range(len(data)):
+        mol = Chem.MolFromSmiles(data[i])
+        Chem.SanitizeMol(mol)
+        motifs = get_motifs(mol)
+        for motif in motifs:
+            vocab.append(motif)
 
-    #count = pd.Series(raw_vocab).value_counts()
-    #mol_name = count.index
-    
-    #motif_length_frequency = []
-
-    #for elem in mol_name:
-    #    m = Chem.MolFromSmiles(elem[0])
-    #    x = m.GetNumAtoms()
-    #    try:
-    #         motif_length_frequency[x]
-    #    except:
-    #        while (len(motif_length_frequency) - 1 < x):
-    #             motif_length_frequency.append(0)
-
-    #    motif_length_frequency[x] += count[elem]
-
-    #print(motif_length_frequency)
-    #count.to_csv('count.csv')
-    #pd.DataFrame(motif_length_frequency).to_csv('motif_count.csv')
-    
-    for x,y in sorted(vocab):
-        print(x, y)
+    for i, x in enumerate(sorted(vocab)):
+        print(x)
