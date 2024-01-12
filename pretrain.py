@@ -16,7 +16,7 @@ from functools import partial
 
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool, GlobalAttention, Set2Set, aggr
 
-from gnn_model import GNN, GNNDecoder, GNNdev
+from gnn_model import GNN, GNNDecoder
 
 from datautils import *
 from loader import MoleculeDataset
@@ -202,7 +202,7 @@ def main():
 
     loader = DataLoaderMaskingPred(dataset, smiles_list, batch_size=args.batch_size, shuffle=True, num_workers = args.num_workers, motif_mask_rate=args.motif_to_mask_percent, intermotif_mask_rate=args.node_to_mask_percent, masking_strategy=args.mask_strat, mask_edge=0)
 
-    encoder_model = GNNdev(args.num_layer, args.emb_dim, device, JK=args.JK, drop_ratio=args.dropout_ratio, graph_pooling = args.graph_pooling, gnn_type=args.gnn_type).to(device)
+    encoder_model = GNN(args.num_layer, args.emb_dim, device, JK=args.JK, drop_ratio=args.dropout_ratio, graph_pooling = args.graph_pooling, gnn_type=args.gnn_type).to(device)
 
     NUM_NODE_ATTR = 119
     NUM_CHIRALITY_ATTR = 3
