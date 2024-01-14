@@ -65,8 +65,7 @@ def train(args, model_list, loader, optimizer_list, device, smiles_list, alpha_l
         smiles = [smiles_list[i] for i in batch.id]
 
         #print(batch.batch)
-        #node_rep = encoder_model(batch.x, batch.edge_index, batch.edge_attr)
-        node_rep = encoder_model(batch.x, batch.edge_index, batch.edge_attr, batch.motif_groups)
+        node_rep = encoder_model(batch.x, batch.edge_index, batch.edge_attr)
 
         if (args.decoder == 'gnn'):
             pred_atom = atom_pred_decoder_model(node_rep, batch)
