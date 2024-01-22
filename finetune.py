@@ -14,7 +14,7 @@ from tqdm import tqdm
 import numpy as np
 
 from gnn_model import GNN, GNN_graphpred, GNNdev
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, mean_squared_error, r2_score
 
 from splitters import scaffold_split, random_split
 import pandas as pd
@@ -26,7 +26,10 @@ import shutil
 
 def train(args, model_list, device, loader, optimizer_list):
 
-    criterion = nn.BCEWithLogitsLoss(reduction = "none")
+    if args.dataset == 'lipo' or args.dataset == 'esol' or args.dataset == 'freesolv':
+        criterion = nn.MSELoss()
+    else:
+        criterion = nn.BCEWithLogitsLoss(reduction = "none")
 
     graph_pred, encoder_model = model_list
     optimizer_pred, optimizer_encoder = optimizer_list
@@ -47,7 +50,10 @@ def train(args, model_list, device, loader, optimizer_list):
         is_valid = y_true**2 > 0
 
         #Loss matrix
-        loss_mat = criterion(y_pred.double(), (y_true+1)/2)
+        if args.dataset == 'lipo' or args.dataset == 'esol' or args.dataset == 'freesolv' or args.dataset.startswith('plym'):
+            loss_mat = criterion(y_pred.double(), y_true)
+        else:
+            loss_mat = criterion(y_pred.double(), (y_true+1)/2)
         
         #loss matrix after removing null target
         loss_mat = torch.where(is_valid, loss_mat, torch.zeros(loss_mat.shape).to(loss_mat.device).to(loss_mat.dtype))
@@ -88,23 +94,37 @@ def eval(args, model_list, device, loader):
     y_scores = torch.cat(y_scores, dim = 0).cpu().numpy()
     y_ids = torch.cat(y_ids, dim = 0).cpu().numpy()
 
-    roc_list = []
+    if args.dataset == 'lipo' or args.dataset == 'esol' or args.dataset == 'freesolv':
+        rmse_list = []
+        r2_list = []
 
-    for i in range(y_true.shape[1]):
-        #AUC is only defined when there is at least one positive data.
-        if np.sum(y_true[:,i] == 1) > 0 and np.sum(y_true[:,i] == -1) > 0:
-            is_valid = y_true[:,i]**2 > 0
-            print((y_true[is_valid,i] + 1)/2)
-            print(y_scores[is_valid,i])
-            print(y_ids)
-            roc_list.append(roc_auc_score((y_true[is_valid,i] + 1)/2, y_scores[is_valid,i]))
+        rmse_list.append(math.sqrt(mean_squared_error(y_true, y_scores)))
+        r2_list.append(r2_score(y_true, y_scores))
+
+        if len(rmse_list) < y_true.shape[1]:
+            print("Some target is missing!")
+            print("Missing ratio: %f" %(1 - float(len(rmse_list))/y_true.shape[0]))
+
+        return sum(rmse_list)/len(rmse_list), sum(r2_list)/len(r2_list) #y_true.shape[1]
+
+    else:
+        roc_list = []
+
+        for i in range(y_true.shape[1]):
+            #AUC is only defined when there is at least one positive data.
+            if np.sum(y_true[:,i] == 1) > 0 and np.sum(y_true[:,i] == -1) > 0:
+                is_valid = y_true[:,i]**2 > 0
+                print((y_true[is_valid,i] + 1)/2)
+                print(y_scores[is_valid,i])
+                print(y_ids)
+                roc_list.append(roc_auc_score((y_true[is_valid,i] + 1)/2, y_scores[is_valid,i]))
             
 
-    if len(roc_list) < y_true.shape[1]:
-        print("Some target is missing!")
-        print("Missing ratio: %f" %(1 - float(len(roc_list))/y_true.shape[1]))
+        if len(roc_list) < y_true.shape[1]:
+            print("Some target is missing!")
+            print("Missing ratio: %f" %(1 - float(len(roc_list))/y_true.shape[1]))
 
-    return sum(roc_list)/len(roc_list)
+        return sum(roc_list)/len(roc_list)
 
 
 def main():
@@ -169,6 +189,12 @@ def main():
         num_tasks = 27
     elif args.dataset == "clintox":
         num_tasks = 2
+    elif args.dataset == "esol":
+        num_tasks = 1
+    elif args.dataset == "freesolv":
+        num_tasks = 1
+    elif args.dataset == "lipo":
+        num_tasks = 1
     else:
         raise ValueError("Invalid dataset name.")
 
@@ -207,38 +233,49 @@ def main():
 
     optimizer = [optimizer_pred, optimizer_encoder]
 
-    train_acc_list = []
-    val_acc_list = []
-    test_acc_list = []
-
-    best_test_acc = 0
+    train_list = []
+    val_list = []
+    test_list = []
 
     for epoch in range(1, args.epochs+1):
         print("====epoch " + str(epoch))
         
         train(args, model, device, train_loader, optimizer)
         
-        print("====Evaluation")
-        if args.eval_train:
-            train_acc = eval(args, model, device, train_loader)
+        if args.dataset == 'lipo' or args.dataset == 'esol' or args.dataset == 'freesolv':
+            print("====Evaluation")
+            if args.eval_train:
+                train_rmse = eval(args, model, device, train_loader)
+            else:
+                print("omit the training accuracy computation")
+                train_rmse = inf
+
+            val_rmse, test_r2 = eval(args, model, device, val_loader)
+            test_rmse, test_r2 = eval(args, model, device, test_loader)
+            print("train: %f val: %f test: %f" %(train_rmse, val_rmse, test_rmse))
+
+            val_list.append(val_rmse)
+            test_list.append(test_rmse)
+            train_list.append(train_rmse)
+
         else:
-            print("omit the training accuracy computation")
-            train_acc = 0
+            print("====Evaluation")
+            if args.eval_train:
+                train_acc = eval(args, model, device, train_loader)
+            else:
+                print("omit the training accuracy computation")
+                train_acc = 0
 
-        val_acc = eval(args, model, device, val_loader)
-        test_acc = eval(args, model, device, test_loader)
-        if (test_acc > best_test_acc):
-            best_test_acc = test_acc
-        print("train: %f val: %f test: %f" %(train_acc, val_acc, test_acc))
+            val_acc = eval(args, model, device, val_loader)
+            test_acc = eval(args, model, device, test_loader)
+            print("train: %f val: %f test: %f" %(train_acc, val_acc, test_acc))
 
-        val_acc_list.append(val_acc)
-        test_acc_list.append(test_acc)
-        train_acc_list.append(train_acc)
+            val_list.append(val_acc)
+            test_list.append(test_acc)
+            train_list.append(train_acc)
 
-    print("Best Test Accuracy: ", best_test_acc)
-
-    df = pd.concat([pd.DataFrame(train_acc_list), pd.DataFrame(val_acc_list), pd.DataFrame(test_acc_list)], axis=1)
-    df.columns = ['train_loss', 'val_loss', 'test_loss']
+    df = pd.concat([pd.DataFrame(train_list), pd.DataFrame(val_list), pd.DataFrame(test_list)], axis=1)
+    df.columns = ['train', 'val', 'test']
     df.to_csv("log/" + args.filename + ".csv")
 
 
