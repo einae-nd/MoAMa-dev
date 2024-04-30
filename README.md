@@ -23,7 +23,7 @@ To download datasets
 
 ```
 wget http://snap.stanford.edu/gnn-pretrain/data/chem_dataset.zip
-unzip chem_dataset.zip -d transferLearning_MoleculeNet_PPI/chem/
+unzip chem_dataset.zip
 ```
 
 To pre-train:
