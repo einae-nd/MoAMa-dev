@@ -342,6 +342,9 @@ class MaskAtom:
             data.node_attr_label = atom_type
             data.node_attr_chi_label = atom_chirality
 
+            for atom_idx in masked_atom_indices_atom:
+                data.x[atom_idx] = torch.tensor([self.num_atom_type, 0])
+
         # element-wise masking
         elif (self.mask_strat == 'element'):
             mask_atom_labels_list = []
