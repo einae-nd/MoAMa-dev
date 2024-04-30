@@ -243,9 +243,7 @@ class MaskAtom:
         self.mask_edge = mask_edge
         
         self.num_chirality_tag = 3
-        self.num_bond_direction = 3 
-
-        self.offset = 0
+        self.num_bond_direction = 3
 
         self.inter_mask_rate = inter_mask_rate
         self.mask_strat = mask_strat
@@ -270,7 +268,6 @@ class MaskAtom:
 
         mol = Chem.MolFromSmiles(smiles)
         motifs = get_motifs(mol)
-        grouping = torch.tensor([0] * len(data.x[:, 1]))
 
         num_atoms = data.x.size()[0]
         sample_size = int(num_atoms * self.mask_rate + 1)
@@ -283,11 +280,6 @@ class MaskAtom:
                         if (inter_motif_proximity(motif, [atom], []) > 5):
                             break
                 valid_motifs.append(motif)
-
-        for i, x in enumerate(motifs):
-            grouping[x] = i + self.offset
-
-        self.offset += i
         
         masked_atom_indices = []
 
