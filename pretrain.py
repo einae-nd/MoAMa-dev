@@ -151,8 +151,8 @@ def main():
     parser = argparse.ArgumentParser(description='PyTorch implementation of pre-training of graph neural networks')
     parser.add_argument('--device', type=int, default=0,
                         help='which gpu to use if any (default: 0)')
-    parser.add_argument('--batch_size', type=int, default=256,
-                        help='input batch size for training (default: 256)')
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help='input batch size for training (default: 32)')
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--lr', type=float, default=0.001,
